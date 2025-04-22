@@ -717,22 +717,22 @@ def run_scraper(date):
 
 
 if __name__ == "__main__":
-    # Ask user input
-    start_date_str = input("Enter the start date (YYYY-MM-DD): ").strip()
-    days_to_scrape_str = input("Enter the number of days to scrape: ").strip()
+    # Try to get date from environment variable, otherwise use today
+    start_date_str = os.environ.get("SCRAPE_START_DATE")
 
-    try:
-        # Parse start date
+    if not start_date_str:
+        # Default to today if no environment variable
+        start_date = datetime.datetime.now().date()
+        start_date_str = start_date.strftime("%Y-%m-%d")
+        days_to_scrape = 1  # Default 1 day
+    else:
+        # Use provided date
         start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        # Parse number of days
-        N = int(days_to_scrape_str)
-    except ValueError:
-        logger.error("Invalid input. Please check your date format (YYYY-MM-DD) and number of days (integer).")
-        sys.exit(1)
+        days_to_scrape = int(os.environ.get("SCRAPE_N_DAYS", 1))
 
-    logger.info(f"Starting scrape from {start_date} for {N} day(s)")
+    logger.info(f"Starting scrape from {start_date} for {days_to_scrape} day(s)")
 
-    for i in range(N):
+    for i in range(days_to_scrape):
         current_date = start_date + datetime.timedelta(days=i)
         logger.info(f"Scraping date: {current_date}")
         success = run_scraper(current_date.strftime("%Y-%m-%d"))
