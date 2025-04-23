@@ -20,12 +20,6 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 import random
 from urllib.parse import urljoin
 import re
-import sys
-import io
-import os
-
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
 
 # Set up logging
 logging.basicConfig(
@@ -56,21 +50,40 @@ MYSQL_CONFIG = {
     "cursorclass": pymysql.cursors.DictCursor
 }
 
-def get_url_with_date(date: str) -> str:
-    """Generate the URL with the specified date.
+def get_dates_range(days_ahead: int = 3) -> List[str]:
+    """
+    Generate a list of dates from today to X days ahead in YYYY-MM-DD format.
     
     Args:
-        date: Date in YYYY-MM-DD format
+        days_ahead: Number of days to include after today
         
     Returns:
-        URL string with the specified date
+        List of date strings in YYYY-MM-DD format
     """
+    dates = []
+    today = datetime.datetime.now()
+    
+    # Include today and the specified number of days ahead
+    for day_offset in range(days_ahead + 1):
+        current_date = today + datetime.timedelta(days=day_offset)
+        date_str = current_date.strftime("%Y-%m-%d")
+        dates.append(date_str)
+    
+    return dates
+
+def get_dynamic_url(date: Optional[str] = None) -> str:
+    """Generate the URL based on provided date or default to tomorrow."""
+    if not date:
+        # Use tomorrow's date by default
+        tomorrow = datetime.datetime.now() + datetime.timedelta(days=1)
+        date = tomorrow.strftime("%Y-%m-%d")
+    
     # Validate date format
     try:
         datetime.datetime.strptime(date, "%Y-%m-%d")
     except ValueError:
-        logger.error(f"Invalid date format: {date}. Date must be in YYYY-MM-DD format.")
-        raise ValueError(f"Invalid date format: {date}. Date must be in YYYY-MM-DD format.")
+        logger.error(f"Invalid date format: {date}. Using default URL.")
+        return f"{BASE_URL}/en/football-tips-and-predictions-for-tomorrow"
     
     # Construct URL with date
     return f"{BASE_URL}/en/football-predictions/predictions-1x2/{date}"
@@ -282,7 +295,7 @@ def extract_standing_details(soup: BeautifulSoup, team_name: str) -> Dict[str, s
 
 def fetch_match_details(game_url: str, home_team: str, away_team: str, scraper: cloudscraper.CloudScraper) -> Dict[str, str]:
     """Fetch detailed match information from the match page."""
-    logger.info(f"Fetching details for {home_team} vs {away_team}".encode('utf-8', errors='ignore').decode('utf-8'))
+    logger.info(f"Fetching details for {home_team} vs {away_team}")
     
     for attempt in range(1, MAX_RETRIES + 1):
         try:
@@ -347,7 +360,7 @@ def fetch_match_details(game_url: str, home_team: str, away_team: str, scraper: 
         "Away GF": "", "Away GA": "", "Away GD": ""
     }
 
-def parse_page(html: str, scraper: cloudscraper.CloudScraper) -> List[Dict[str, str]]:
+def parse_page(html: str, scraper: cloudscraper.CloudScraper, current_date: str) -> List[Dict[str, str]]:
     """Parse the page HTML to extract match information."""
     soup = BeautifulSoup(html, "html.parser")
     matches = soup.find_all("div", class_="rcnt")
@@ -426,6 +439,7 @@ def parse_page(html: str, scraper: cloudscraper.CloudScraper) -> List[Dict[str, 
                 match_data = {
                     "base": {
                         "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "Fetch Date": current_date,  # Store the date we're scraping for
                         "Game": game_name,
                         "Time": match_time,
                         "ISO Time": match_datetime,
@@ -486,6 +500,131 @@ def parse_page(html: str, scraper: cloudscraper.CloudScraper) -> List[Dict[str, 
             
     return predictions
 
+def save_to_mysql(data: List[Dict[str, str]]) -> int:
+    """Save the extracted data to MySQL database."""
+    if not data:
+        logger.warning("No data to save to database")
+        return 0
+    
+    conn = None
+    cursor = None
+    saved_count = 0
+    
+    try:
+        conn = pymysql.connect(**MYSQL_CONFIG)
+        cursor = conn.cursor()
+        
+        # SQL for inserting or updating data
+        sql = """
+        INSERT INTO forebet_predictions (
+            timestamp, fetch_date, game_name, match_time, iso_time, 
+            score, halftime_score, extra_time, extra_time_minute, prediction,
+            prob_home, prob_draw, prob_away, home_team, away_team, match_url,
+            league_name, live_odds, home_rank, away_rank, league,
+            home_pts, home_gp, home_w, home_d, home_l, home_gf, home_ga, home_gd,
+            away_pts, away_gp, away_w, away_d, away_l, away_gf, away_ga, away_gd
+        ) VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+        )
+        ON DUPLICATE KEY UPDATE
+            timestamp = VALUES(timestamp),
+            score = VALUES(score),
+            halftime_score = VALUES(halftime_score),
+            extra_time = VALUES(extra_time),
+            extra_time_minute = VALUES(extra_time_minute),
+            prediction = VALUES(prediction),
+            prob_home = VALUES(prob_home),
+            prob_draw = VALUES(prob_draw),
+            prob_away = VALUES(prob_away),
+            live_odds = VALUES(live_odds),
+            home_rank = VALUES(home_rank),
+            away_rank = VALUES(away_rank),
+            league = VALUES(league),
+            home_pts = VALUES(home_pts),
+            home_gp = VALUES(home_gp),
+            home_w = VALUES(home_w),
+            home_d = VALUES(home_d),
+            home_l = VALUES(home_l),
+            home_gf = VALUES(home_gf),
+            home_ga = VALUES(home_ga),
+            home_gd = VALUES(home_gd),
+            away_pts = VALUES(away_pts),
+            away_gp = VALUES(away_gp),
+            away_w = VALUES(away_w),
+            away_d = VALUES(away_d),
+            away_l = VALUES(away_l),
+            away_gf = VALUES(away_gf),
+            away_ga = VALUES(away_ga),
+            away_gd = VALUES(away_gd)
+        """
+        
+        for match in data:
+            values = (
+                match.get("Timestamp"),
+                match.get("Fetch Date"),
+                match.get("Game"),
+                match.get("Time"),
+                match.get("ISO Time"),
+                match.get("Score"),
+                match.get("Half-Time Score"),
+                match.get("ET"),
+                match.get("ET Minute"),
+                match.get("Prediction"),
+                match.get("1%"),
+                match.get("X%"),
+                match.get("2%"),
+                match.get("Home Team"),
+                match.get("Away Team"),
+                match.get("Match URL"),
+                match.get("League", ""),
+                match.get("Live Odds", ""),
+                match.get("Home Rank", ""),
+                match.get("Away Rank", ""),
+                match.get("League", ""),
+                match.get("Home PTS", ""),
+                match.get("Home GP", ""),
+                match.get("Home W", ""),
+                match.get("Home D", ""),
+                match.get("Home L", ""),
+                match.get("Home GF", ""),
+                match.get("Home GA", ""),
+                match.get("Home GD", ""),
+                match.get("Away PTS", ""),
+                match.get("Away GP", ""),
+                match.get("Away W", ""),
+                match.get("Away D", ""),
+                match.get("Away L", ""),
+                match.get("Away GF", ""),
+                match.get("Away GA", ""),
+                match.get("Away GD", "")
+            )
+            
+            cursor.execute(sql, values)
+            saved_count += 1
+        
+        conn.commit()
+        logger.info(f"Successfully saved {saved_count} matches to database")
+        return saved_count
+        
+    except pymysql.MySQLError as e:
+        logger.error(f"MySQL Error: {e}")
+        if conn:
+            conn.rollback()
+        traceback.print_exc()
+        return 0
+    except Exception as e:
+        logger.error(f"Unexpected error during save: {e}")
+        if conn:
+            conn.rollback()
+        traceback.print_exc()
+        return 0
+    finally:
+        if cursor:
+            cursor.close()
+        if conn:
+            conn.close()
+
 def save_to_excel(data: List[Dict[str, str]], filename: str = None):
     """Save extracted data to Excel file."""
     if not filename:
@@ -494,254 +633,99 @@ def save_to_excel(data: List[Dict[str, str]], filename: str = None):
     
     try:
         df = pd.DataFrame(data)
-        df.to_excel(filename, index=False, engine='openpyxl')
-        logger.info(f"Excel file saved as: {filename}")
-        return filename
+        df.to_excel(filename, index=False)
+        logger.info(f"Data saved to Excel file: {filename}")
+        return True
     except Exception as e:
         logger.error(f"Error saving to Excel: {e}")
-        return None
-
-def save_to_mysql(data: List[Dict[str, str]]):
-    """Save or update match data in MySQL database."""
-    if not data:
-        logger.warning("No data to save to MySQL")
-        return
-        
-    logger.info(f"Saving {len(data)} records to MySQL...")
-    conn = None
-    cursor = None
-    
-    try:
-        conn = pymysql.connect(**MYSQL_CONFIG)
-        cursor = conn.cursor()
-        
-        # Create table if it doesn't exist
-        try:
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS forebet_matches (
-                    id INT AUTO_INCREMENT PRIMARY KEY,
-                    timestamp DATETIME,
-                    game VARCHAR(255),
-                    time_str VARCHAR(50),
-                    iso_time VARCHAR(50),
-                    score VARCHAR(50),
-                    half_time_score VARCHAR(50),
-                    et VARCHAR(50),
-                    et_minute VARCHAR(50),
-                    prediction VARCHAR(50),
-                    prob_1 VARCHAR(20),
-                    prob_x VARCHAR(20),
-                    prob_2 VARCHAR(20),
-                    home_team VARCHAR(255),
-                    away_team VARCHAR(255),
-                    home_rank VARCHAR(20),
-                    away_rank VARCHAR(20),
-                    match_url VARCHAR(255) UNIQUE,
-                    live_odds VARCHAR(100),
-                    home_pts VARCHAR(20),
-                    home_gp VARCHAR(20),
-                    home_w VARCHAR(20),
-                    home_d VARCHAR(20),
-                    home_l VARCHAR(20),
-                    home_gf VARCHAR(20),
-                    home_ga VARCHAR(20),
-                    home_gd VARCHAR(20),
-                    away_pts VARCHAR(20),
-                    away_gp VARCHAR(20),
-                    away_w VARCHAR(20),
-                    away_d VARCHAR(20),
-                    away_l VARCHAR(20),
-                    away_gf VARCHAR(20),
-                    away_ga VARCHAR(20),
-                    away_gd VARCHAR(20),
-                    league VARCHAR(255),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-                ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
-            """)
-            conn.commit()
-        except pymysql.MySQLError as err:
-            logger.warning(f"Table check/creation warning: {err}")
-
-        inserted = 0
-        updated = 0
-        errors = 0
-
-        for row in data:
-            try:
-                # Check if record exists
-                cursor.execute("SELECT id FROM forebet_matches WHERE match_url = %s", (row["Match URL"],))
-                exists = cursor.fetchone()
-
-                if exists:
-                    # Update existing record
-                    cursor.execute("""
-                        UPDATE forebet_matches SET
-                            score=%s, half_time_score=%s, et=%s, et_minute=%s,
-                            prediction=%s, prob_1=%s, prob_x=%s, prob_2=%s,
-                            home_team=%s, away_team=%s, home_rank=%s, away_rank=%s,
-                            live_odds=%s,
-                            home_pts=%s, home_gp=%s, home_w=%s, home_d=%s, home_l=%s,
-                            home_gf=%s, home_ga=%s, home_gd=%s,
-                            away_pts=%s, away_gp=%s, away_w=%s, away_d=%s, away_l=%s,
-                            away_gf=%s, away_ga=%s, away_gd=%s, league=%s
-                        WHERE match_url=%s
-                    """, (
-                        row["Score"], row["Half-Time Score"], row["ET"], row["ET Minute"],
-                        row["Prediction"], row["1%"], row["X%"], row["2%"],
-                        row["Home Team"], row["Away Team"], row["Home Rank"], row["Away Rank"],
-                        row["Live Odds"],
-                        row.get("Home PTS", ""), row.get("Home GP", ""), row.get("Home W", ""),
-                        row.get("Home D", ""), row.get("Home L", ""), row.get("Home GF", ""),
-                        row.get("Home GA", ""), row.get("Home GD", ""),
-                        row.get("Away PTS", ""), row.get("Away GP", ""), row.get("Away W", ""),
-                        row.get("Away D", ""), row.get("Away L", ""), row.get("Away GF", ""),
-                        row.get("Away GA", ""), row.get("Away GD", ""), row.get("League", ""),
-                        row["Match URL"]
-                    ))
-                    updated += 1
-                else:
-                    # Insert new record
-                    cursor.execute("""
-                        INSERT INTO forebet_matches (
-                            timestamp, game, time_str, iso_time, score, half_time_score,
-                            et, et_minute, prediction, prob_1, prob_x, prob_2,
-                            home_team, away_team, home_rank, away_rank, match_url, live_odds,
-                            home_pts, home_gp, home_w, home_d, home_l,
-                            home_gf, home_ga, home_gd,
-                            away_pts, away_gp, away_w, away_d, away_l,
-                            away_gf, away_ga, away_gd, league
-                        )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s, %s,
-                                %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        row["Timestamp"], row["Game"], row["Time"], row["ISO Time"], row["Score"],
-                        row["Half-Time Score"], row["ET"], row["ET Minute"], row["Prediction"],
-                        row["1%"], row["X%"], row["2%"], row["Home Team"], row["Away Team"],
-                        row["Home Rank"], row["Away Rank"], row["Match URL"], row["Live Odds"],
-                        row.get("Home PTS", ""), row.get("Home GP", ""), row.get("Home W", ""),
-                        row.get("Home D", ""), row.get("Home L", ""), row.get("Home GF", ""),
-                        row.get("Home GA", ""), row.get("Home GD", ""),
-                        row.get("Away PTS", ""), row.get("Away GP", ""), row.get("Away W", ""),
-                        row.get("Away D", ""), row.get("Away L", ""), row.get("Away GF", ""),
-                        row.get("Away GA", ""), row.get("Away GD", ""), row.get("League", "")
-                    ))
-                    inserted += 1
-                
-                # Commit each record individually to avoid losing all on error
-                conn.commit()
-                
-            except pymysql.MySQLError as err:
-                errors += 1
-                logger.error(f"MySQL Error with {row['Game']}: {err}")
-                conn.rollback()  # Rollback the failed transaction
-                
-        logger.info(f"Database sync complete: {inserted} inserted, {updated} updated, {errors} errors")
-        
-    except pymysql.MySQLError as err:
-        logger.error(f"MySQL Error: {err}")
         traceback.print_exc()
-    except Exception as e:
-        logger.error(f"Unexpected error: {e}")
-        traceback.print_exc()
-    finally:
-        # Close connections
-        if cursor:
-            cursor.close()
-        if conn:
-            conn.close()
+        return False
 
-def run_scraper(date):
-    """Main function to run the scraper with a specified date.
+def fetch_multiple_dates(driver, days_ahead: int = 3) -> List[Dict[str, str]]:
+    """
+    Fetch data for multiple dates: today and up to X days ahead.
     
     Args:
-        date: Date in YYYY-MM-DD format
+        driver: Selenium WebDriver instance
+        days_ahead: Number of days to fetch after today
+        
+    Returns:
+        Combined list of prediction data for all dates
     """
-    if not date:
-        logger.error("Date parameter is required. Format: YYYY-MM-DD")
-        return False
-        
-    start_time = time.time()
-    logger.info(f"Starting scrape at {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    logger.info(f"Target date: {date}")
+    all_predictions = []
+    dates = get_dates_range(days_ahead)
+    logger.info(f"Fetching data for these dates: {dates}")
     
-    # Generate the URL with the target date
-    try:
-        target_url = get_url_with_date(date)
-        logger.info(f"Target URL: {target_url}")
-    except ValueError as e:
-        logger.error(str(e))
-        return False
+    # Setup cloud scraper for additional requests
+    scraper = cloudscraper.create_scraper(
+        browser={
+            'browser': 'chrome',
+            'platform': 'windows',
+            'desktop': True
+        },
+        delay=10
+    )
     
-    # Test database connection before proceeding
-    if not test_mysql_connection():
-        logger.error("Aborting: Cannot connect to the database.")
-        return False
-    
-    driver = None
-    try:
-        # Setup and use WebDriver
-        driver = setup_driver()
-        html = load_full_page(driver, target_url)
-        
-        # Create a cloudscraper session for detail pages
-        scraper = cloudscraper.create_scraper(
-            browser={
-                'browser': 'chrome',
-                'platform': 'windows',
-                'desktop': True
-            }
-        )
-        
-        # Parse the page and get the data
-        data = parse_page(html, scraper)
-        
-        # Export data to Excel if needed
-        if data:
-            excel_file = save_to_excel(data, f"forebet_matches_{date}.xlsx")
-            logger.info(f"Data exported to {excel_file}")
-            return True
-        else:
-            logger.warning("No data was found or extracted.")
-            return False
+    # Process each date
+    for date in dates:
+        try:
+            logger.info(f"Processing date: {date}")
+            url = get_dynamic_url(date)
+            html = load_full_page(driver, url)
+            predictions = parse_page(html, scraper, date)
             
+            all_predictions.extend(predictions)
+            logger.info(f"Completed fetching for date: {date}, found {len(predictions)} matches")
+            
+            # Random delay between date processing
+            random_delay()
+            
+        except Exception as e:
+            logger.error(f"Error processing date {date}: {e}")
+            traceback.print_exc()
+    
+    return all_predictions
+
+def main():
+    # Parse command line arguments 
+    parser = argparse.ArgumentParser(description='Forebet Scraper')
+    parser.add_argument('--days', type=int, default=3, help='Number of days ahead to scrape (including today)')
+    parser.add_argument('--excel', action='store_true', help='Save results to Excel file')
+    args = parser.parse_args()
+    
+    # Test database connection
+    if not test_mysql_connection():
+        logger.error("Database connection failed. Exiting.")
+        return
+    
+    # Setup web driver
+    try:
+        driver = setup_driver()
+        
+        # Fetch predictions for multiple dates
+        predictions = fetch_multiple_dates(driver, days_ahead=args.days)
+        
+        logger.info(f"Total predictions collected: {len(predictions)}")
+        
+        # Save to Excel if requested
+        if args.excel and predictions:
+            excel_file = f"forebet_matches_{datetime.datetime.now().strftime('%Y-%m-%d')}.xlsx"
+            save_to_excel(predictions, excel_file)
+            logger.info(f"Data saved to {excel_file}")
+        
     except Exception as e:
-        logger.error(f"Error during scraping: {str(e)}")
+        logger.error(f"Error in main process: {e}")
         traceback.print_exc()
-        return False
     finally:
-        # Clean up resources
-        if driver:
-            driver.quit()
-        logger.info(f"Scraping completed in {time.time() - start_time:.2f} seconds")
-
-
+        # Ensure driver is closed
+        try:
+            if 'driver' in locals() and driver:
+                driver.quit()
+                logger.info("WebDriver closed")
+        except:
+            pass
+        
+    logger.info("Script execution completed")
 
 if __name__ == "__main__":
-    # Try to get date from environment variable, otherwise use today
-    start_date_str = os.environ.get("SCRAPE_START_DATE")
-
-    if not start_date_str:
-        # Default to today if no environment variable
-        start_date = datetime.datetime.now().date()
-        start_date_str = start_date.strftime("%Y-%m-%d")
-        days_to_scrape = 1  # Default 1 day
-    else:
-        # Use provided date
-        start_date = datetime.datetime.strptime(start_date_str, "%Y-%m-%d").date()
-        days_to_scrape = int(os.environ.get("SCRAPE_N_DAYS", 1))
-
-    logger.info(f"Starting scrape from {start_date} for {days_to_scrape} day(s)")
-
-    for i in range(days_to_scrape):
-        current_date = start_date + datetime.timedelta(days=i)
-        logger.info(f"Scraping date: {current_date}")
-        success = run_scraper(current_date.strftime("%Y-%m-%d"))
-
-        if not success:
-            logger.warning(f"Scraping failed for {current_date}")
-        else:
-            logger.info(f"Scraping finished for {current_date}")
-
-    logger.info("All scraping finished 🎉")
+    main()
