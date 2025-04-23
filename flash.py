@@ -493,129 +493,210 @@ def parse_page(html: str, scraper: cloudscraper.CloudScraper, current_date: str)
                         # Add match with basic info only if details failed
                         predictions.append(match["base"])
 
-            # Save batch to database
+            # Save batch to database - only update existing records
             save_to_mysql(predictions[-len(temp_matches):])
             logger.info(f"Processed {len(temp_matches)} matches in this batch")
             
     return predictions
 
-def save_to_mysql(data: List[Dict[str, str]]) -> int:
-    """Save the extracted data to MySQL database."""
+def save_to_mysql(data: List[Dict[str, str]]) -> Tuple[int, int]:
+    """
+    Save the extracted data to MySQL database.
+    Updates existing records and inserts new ones if they don't exist.
+    
+    Args:
+        data: List of match data dictionaries
+    
+    Returns:
+        Tuple of (updated_count, inserted_count)
+    """
     if not data:
         logger.warning("No data to save to database")
-        return 0
+        return (0, 0)
     
     conn = None
     cursor = None
-    saved_count = 0
+    updated_count = 0
+    inserted_count = 0
     
     try:
         conn = pymysql.connect(**MYSQL_CONFIG)
         cursor = conn.cursor()
         
-        # SQL for inserting or updating data - updated to match the actual table column names
-        sql = """
-        INSERT INTO forebet_matches (
-            timestamp, game, time_str, iso_time, 
-            score, half_time_score, et, et_minute, prediction,
-            prob_1, prob_x, prob_2, home_team, away_team, match_url,
-            live_odds, home_rank, away_rank, league,
-            home_pts, home_gp, home_w, home_d, home_l, home_gf, home_ga, home_gd,
-            away_pts, away_gp, away_w, away_d, away_l, away_gf, away_ga, away_gd
-        ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+        # First check if record exists
+        check_sql = """
+        SELECT COUNT(*) AS count FROM forebet_matches 
+        WHERE game = %s AND home_team = %s AND away_team = %s AND match_url = %s
+        """
+        
+        # SQL for updating existing data
+        update_sql = """
+        UPDATE forebet_matches
+        SET
+            timestamp = %s,
+            score = %s,
+            half_time_score = %s,
+            et = %s,
+            et_minute = %s,
+            prediction = %s,
+            prob_1 = %s,
+            prob_x = %s,
+            prob_2 = %s,
+            live_odds = %s,
+            home_rank = %s,
+            away_rank = %s,
+            league = %s,
+            home_pts = %s,
+            home_gp = %s,
+            home_w = %s,
+            home_d = %s,
+            home_l = %s,
+            home_gf = %s,
+            home_ga = %s,
+            home_gd = %s,
+            away_pts = %s,
+            away_gp = %s,
+            away_w = %s,
+            away_d = %s,
+            away_l = %s,
+            away_gf = %s,
+            away_ga = %s,
+            away_gd = %s
+        WHERE
+            game = %s AND home_team = %s AND away_team = %s AND match_url = %s
+        """
+        
+        # SQL for inserting new records
+        insert_sql = """
+        INSERT INTO forebet_matches
+        (
+            timestamp, game, time_str, iso_time, score, half_time_score, et, et_minute,
+            prediction, prob_1, prob_x, prob_2, live_odds, home_team, away_team, match_url,
+            home_rank, away_rank, league, home_pts, home_gp, home_w, home_d, home_l,
+            home_gf, home_ga, home_gd, away_pts, away_gp, away_w, away_d, away_l,
+            away_gf, away_ga, away_gd
+        )
+        VALUES (
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
-        ON DUPLICATE KEY UPDATE
-            timestamp = VALUES(timestamp),
-            score = VALUES(score),
-            half_time_score = VALUES(half_time_score),
-            et = VALUES(et),
-            et_minute = VALUES(et_minute),
-            prediction = VALUES(prediction),
-            prob_1 = VALUES(prob_1),
-            prob_x = VALUES(prob_x),
-            prob_2 = VALUES(prob_2),
-            live_odds = VALUES(live_odds),
-            home_rank = VALUES(home_rank),
-            away_rank = VALUES(away_rank),
-            league = VALUES(league),
-            home_pts = VALUES(home_pts),
-            home_gp = VALUES(home_gp),
-            home_w = VALUES(home_w),
-            home_d = VALUES(home_d),
-            home_l = VALUES(home_l),
-            home_gf = VALUES(home_gf),
-            home_ga = VALUES(home_ga),
-            home_gd = VALUES(home_gd),
-            away_pts = VALUES(away_pts),
-            away_gp = VALUES(away_gp),
-            away_w = VALUES(away_w),
-            away_d = VALUES(away_d),
-            away_l = VALUES(away_l),
-            away_gf = VALUES(away_gf),
-            away_ga = VALUES(away_ga),
-            away_gd = VALUES(away_gd)
         """
         
         for match in data:
-            values = (
-                match.get("timestamp"),
+            # Check if record exists
+            check_values = (
                 match.get("game"),
-                match.get("time_str"),
-                match.get("iso_time"),
-                match.get("score"),
-                match.get("half_time_score"),
-                match.get("et"),
-                match.get("et_minute"),
-                match.get("prediction"),
-                match.get("prob_1"),
-                match.get("prob_x"),
-                match.get("prob_2"),
                 match.get("home_team"),
                 match.get("away_team"),
-                match.get("match_url"),
-                match.get("live_odds", ""),
-                match.get("home_rank", ""),
-                match.get("away_rank", ""),
-                match.get("league", ""),
-                match.get("home_pts", ""),
-                match.get("home_gp", ""),
-                match.get("home_w", ""),
-                match.get("home_d", ""),
-                match.get("home_l", ""),
-                match.get("home_gf", ""),
-                match.get("home_ga", ""),
-                match.get("home_gd", ""),
-                match.get("away_pts", ""),
-                match.get("away_gp", ""),
-                match.get("away_w", ""),
-                match.get("away_d", ""),
-                match.get("away_l", ""),
-                match.get("away_gf", ""),
-                match.get("away_ga", ""),
-                match.get("away_gd", "")
+                match.get("match_url")
             )
             
-            cursor.execute(sql, values)
-            saved_count += 1
+            cursor.execute(check_sql, check_values)
+            result = cursor.fetchone()
+            
+            if result and result['count'] > 0:
+                # Record exists, proceed with update
+                update_values = (
+                    match.get("timestamp"),
+                    match.get("score", ""),
+                    match.get("half_time_score", ""),
+                    match.get("et", ""),
+                    match.get("et_minute", ""),
+                    match.get("prediction", ""),
+                    match.get("prob_1", ""),
+                    match.get("prob_x", ""),
+                    match.get("prob_2", ""),
+                    match.get("live_odds", ""),
+                    match.get("home_rank", ""),
+                    match.get("away_rank", ""),
+                    match.get("league", ""),
+                    match.get("home_pts", ""),
+                    match.get("home_gp", ""),
+                    match.get("home_w", ""),
+                    match.get("home_d", ""),
+                    match.get("home_l", ""),
+                    match.get("home_gf", ""),
+                    match.get("home_ga", ""),
+                    match.get("home_gd", ""),
+                    match.get("away_pts", ""),
+                    match.get("away_gp", ""),
+                    match.get("away_w", ""),
+                    match.get("away_d", ""),
+                    match.get("away_l", ""),
+                    match.get("away_gf", ""),
+                    match.get("away_ga", ""),
+                    match.get("away_gd", ""),
+                    # WHERE clause values
+                    match.get("game"),
+                    match.get("home_team"),
+                    match.get("away_team"),
+                    match.get("match_url")
+                )
+                
+                cursor.execute(update_sql, update_values)
+                rows_affected = cursor.rowcount
+                if rows_affected > 0:
+                    updated_count += 1
+                    logger.info(f"Updated: {match.get('home_team')} vs {match.get('away_team')}")
+            else:
+                # Record doesn't exist, insert new one
+                insert_values = (
+                    match.get("timestamp"),
+                    match.get("game", ""),
+                    match.get("time_str", ""),
+                    match.get("iso_time", ""),
+                    match.get("score", ""),
+                    match.get("half_time_score", ""),
+                    match.get("et", ""),
+                    match.get("et_minute", ""),
+                    match.get("prediction", ""),
+                    match.get("prob_1", ""),
+                    match.get("prob_x", ""),
+                    match.get("prob_2", ""),
+                    match.get("live_odds", ""),
+                    match.get("home_team", ""),
+                    match.get("away_team", ""),
+                    match.get("match_url", ""),
+                    match.get("home_rank", ""),
+                    match.get("away_rank", ""),
+                    match.get("league", ""),
+                    match.get("home_pts", ""),
+                    match.get("home_gp", ""),
+                    match.get("home_w", ""),
+                    match.get("home_d", ""),
+                    match.get("home_l", ""),
+                    match.get("home_gf", ""),
+                    match.get("home_ga", ""),
+                    match.get("home_gd", ""),
+                    match.get("away_pts", ""),
+                    match.get("away_gp", ""),
+                    match.get("away_w", ""),
+                    match.get("away_d", ""),
+                    match.get("away_l", ""),
+                    match.get("away_gf", ""),
+                    match.get("away_ga", ""),
+                    match.get("away_gd", "")
+                )
+                cursor.execute(insert_sql, insert_values)
+                inserted_count += 1
+                logger.info(f"Inserted new match: {match.get('home_team')} vs {match.get('away_team')}")
         
         conn.commit()
-        logger.info(f"Successfully saved {saved_count} matches to database")
-        return saved_count
+        logger.info(f"Database summary: {updated_count} records updated, {inserted_count} records inserted")
+        return (updated_count, inserted_count)
         
     except pymysql.MySQLError as e:
         logger.error(f"MySQL Error: {e}")
         if conn:
             conn.rollback()
         traceback.print_exc()
-        return 0
+        return (0, 0)
     except Exception as e:
         logger.error(f"Unexpected error during save: {e}")
         if conn:
             conn.rollback()
         traceback.print_exc()
-        return 0
+        return (0, 0)
     finally:
         if cursor:
             cursor.close()
@@ -690,6 +771,8 @@ def main():
     parser.add_argument('--excel', action='store_true', help='Save results to Excel file')
     args = parser.parse_args()
     
+    logger.info("Starting Forebet Scraper - will update existing records and insert new ones")
+    
     # Test database connection
     if not test_mysql_connection():
         logger.error("Database connection failed. Exiting.")
@@ -723,6 +806,5 @@ def main():
             pass
         
     logger.info("Script execution completed")
-
 if __name__ == "__main__":
     main()
