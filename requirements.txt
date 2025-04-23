@@ -1,6 +1,7 @@
 selenium
 webdriver-manager
-beautifulsoup4
 cloudscraper
+beautifulsoup4
 pymysql
 pandas
+openpyxl
