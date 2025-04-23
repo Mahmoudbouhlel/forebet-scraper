@@ -330,15 +330,15 @@ def fetch_match_details(game_url: str, home_team: str, away_team: str, scraper: 
                 
                 # Combine results
                 result = {
-                    "Home Rank": home_rank,
-                    "Away Rank": away_rank,
-                    "League": league_name
+                    "home_rank": home_rank,
+                    "away_rank": away_rank,
+                    "league": league_name
                 }
 
                 # Add home team stats with prefix
-                result.update({f"Home {k}": v for k, v in home_stats.items()})
+                result.update({f"home_{k.lower()}": v for k, v in home_stats.items()})
                 # Add away team stats with prefix
-                result.update({f"Away {k}": v for k, v in away_stats.items()})
+                result.update({f"away_{k.lower()}": v for k, v in away_stats.items()})
 
                 logger.info(f"Successfully fetched details for {home_team} vs {away_team}")
                 return result
@@ -353,11 +353,11 @@ def fetch_match_details(game_url: str, home_team: str, away_team: str, scraper: 
 
     logger.error(f"Failed to fetch details for {home_team} vs {away_team} after {MAX_RETRIES} attempts")
     return {
-        "Home Rank": "", "Away Rank": "", "League": "",
-        "Home PTS": "", "Home GP": "", "Home W": "", "Home D": "", "Home L": "",
-        "Home GF": "", "Home GA": "", "Home GD": "",
-        "Away PTS": "", "Away GP": "", "Away W": "", "Away D": "", "Away L": "",
-        "Away GF": "", "Away GA": "", "Away GD": ""
+        "home_rank": "", "away_rank": "", "league": "",
+        "home_pts": "", "home_gp": "", "home_w": "", "home_d": "", "home_l": "",
+        "home_gf": "", "home_ga": "", "home_gd": "",
+        "away_pts": "", "away_gp": "", "away_w": "", "away_d": "", "away_l": "",
+        "away_gf": "", "away_ga": "", "away_gd": ""
     }
 
 def parse_page(html: str, scraper: cloudscraper.CloudScraper, current_date: str) -> List[Dict[str, str]]:
@@ -438,24 +438,23 @@ def parse_page(html: str, scraper: cloudscraper.CloudScraper, current_date: str)
                 # Store all basic data
                 match_data = {
                     "base": {
-                        "Timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                        "Fetch Date": current_date,  # Store the date we're scraping for
-                        "Game": game_name,
-                        "Time": match_time,
-                        "ISO Time": match_datetime,
-                        "Score": match_score,
-                        "Half-Time Score": half_time_score,
-                        "ET": extra_time,
-                        "ET Minute": extra_minute,
-                        "Prediction": prediction,
-                        "1%": prob_1,
-                        "X%": prob_x,
-                        "2%": prob_2,
-                        "Home Team": home_team,
-                        "Away Team": away_team,
-                        "Match URL": game_url,
-                        "League": league_name,
-                        "Live Odds": live_odds
+                        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "game": game_name,
+                        "time_str": match_time,
+                        "iso_time": match_datetime,
+                        "score": match_score,
+                        "half_time_score": half_time_score,
+                        "et": extra_time,
+                        "et_minute": extra_minute,
+                        "prediction": prediction,
+                        "prob_1": prob_1,
+                        "prob_x": prob_x,
+                        "prob_2": prob_2,
+                        "home_team": home_team,
+                        "away_team": away_team,
+                        "match_url": game_url,
+                        "league": league_name,
+                        "live_odds": live_odds
                     },
                     "url": game_url,
                     "home": home_team,
@@ -488,7 +487,7 @@ def parse_page(html: str, scraper: cloudscraper.CloudScraper, current_date: str)
                         result = future.result()
                         match["base"].update(result)
                         predictions.append(match["base"])
-                        logger.info(f"Processed: {match['base']['Game']}")
+                        logger.info(f"Processed: {match['base']['game']}")
                     except Exception as e:
                         logger.error(f"Error in match detail processing: {e}")
                         # Add match with basic info only if details failed
@@ -514,29 +513,29 @@ def save_to_mysql(data: List[Dict[str, str]]) -> int:
         conn = pymysql.connect(**MYSQL_CONFIG)
         cursor = conn.cursor()
         
-        # SQL for inserting or updating data
+        # SQL for inserting or updating data - updated to match the actual table column names
         sql = """
-        INSERT INTO forebet_predictions (
-            timestamp, fetch_date, game_name, match_time, iso_time, 
-            score, halftime_score, extra_time, extra_time_minute, prediction,
-            prob_home, prob_draw, prob_away, home_team, away_team, match_url,
-            league_name, live_odds, home_rank, away_rank, league,
+        INSERT INTO forebet_matches (
+            timestamp, game, time_str, iso_time, 
+            score, half_time_score, et, et_minute, prediction,
+            prob_1, prob_x, prob_2, home_team, away_team, match_url,
+            live_odds, home_rank, away_rank, league,
             home_pts, home_gp, home_w, home_d, home_l, home_gf, home_ga, home_gd,
             away_pts, away_gp, away_w, away_d, away_l, away_gf, away_ga, away_gd
         ) VALUES (
-            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+            %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
             %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
         )
         ON DUPLICATE KEY UPDATE
             timestamp = VALUES(timestamp),
             score = VALUES(score),
-            halftime_score = VALUES(halftime_score),
-            extra_time = VALUES(extra_time),
-            extra_time_minute = VALUES(extra_time_minute),
+            half_time_score = VALUES(half_time_score),
+            et = VALUES(et),
+            et_minute = VALUES(et_minute),
             prediction = VALUES(prediction),
-            prob_home = VALUES(prob_home),
-            prob_draw = VALUES(prob_draw),
-            prob_away = VALUES(prob_away),
+            prob_1 = VALUES(prob_1),
+            prob_x = VALUES(prob_x),
+            prob_2 = VALUES(prob_2),
             live_odds = VALUES(live_odds),
             home_rank = VALUES(home_rank),
             away_rank = VALUES(away_rank),
@@ -561,43 +560,41 @@ def save_to_mysql(data: List[Dict[str, str]]) -> int:
         
         for match in data:
             values = (
-                match.get("Timestamp"),
-                match.get("Fetch Date"),
-                match.get("Game"),
-                match.get("Time"),
-                match.get("ISO Time"),
-                match.get("Score"),
-                match.get("Half-Time Score"),
-                match.get("ET"),
-                match.get("ET Minute"),
-                match.get("Prediction"),
-                match.get("1%"),
-                match.get("X%"),
-                match.get("2%"),
-                match.get("Home Team"),
-                match.get("Away Team"),
-                match.get("Match URL"),
-                match.get("League", ""),
-                match.get("Live Odds", ""),
-                match.get("Home Rank", ""),
-                match.get("Away Rank", ""),
-                match.get("League", ""),
-                match.get("Home PTS", ""),
-                match.get("Home GP", ""),
-                match.get("Home W", ""),
-                match.get("Home D", ""),
-                match.get("Home L", ""),
-                match.get("Home GF", ""),
-                match.get("Home GA", ""),
-                match.get("Home GD", ""),
-                match.get("Away PTS", ""),
-                match.get("Away GP", ""),
-                match.get("Away W", ""),
-                match.get("Away D", ""),
-                match.get("Away L", ""),
-                match.get("Away GF", ""),
-                match.get("Away GA", ""),
-                match.get("Away GD", "")
+                match.get("timestamp"),
+                match.get("game"),
+                match.get("time_str"),
+                match.get("iso_time"),
+                match.get("score"),
+                match.get("half_time_score"),
+                match.get("et"),
+                match.get("et_minute"),
+                match.get("prediction"),
+                match.get("prob_1"),
+                match.get("prob_x"),
+                match.get("prob_2"),
+                match.get("home_team"),
+                match.get("away_team"),
+                match.get("match_url"),
+                match.get("live_odds", ""),
+                match.get("home_rank", ""),
+                match.get("away_rank", ""),
+                match.get("league", ""),
+                match.get("home_pts", ""),
+                match.get("home_gp", ""),
+                match.get("home_w", ""),
+                match.get("home_d", ""),
+                match.get("home_l", ""),
+                match.get("home_gf", ""),
+                match.get("home_ga", ""),
+                match.get("home_gd", ""),
+                match.get("away_pts", ""),
+                match.get("away_gp", ""),
+                match.get("away_w", ""),
+                match.get("away_d", ""),
+                match.get("away_l", ""),
+                match.get("away_gf", ""),
+                match.get("away_ga", ""),
+                match.get("away_gd", "")
             )
             
             cursor.execute(sql, values)
@@ -708,7 +705,10 @@ def main():
         logger.info(f"Total predictions collected: {len(predictions)}")
         
         # Save to Excel if requested
-    
+        if args.excel and predictions:
+            excel_file = f"forebet_matches_{datetime.datetime.now().strftime('%Y-%m-%d')}.xlsx"
+            save_to_excel(predictions, excel_file)
+            logger.info(f"Data saved to {excel_file}")
         
     except Exception as e:
         logger.error(f"Error in main process: {e}")
