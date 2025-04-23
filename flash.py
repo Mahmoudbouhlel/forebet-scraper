@@ -5,7 +5,7 @@ from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from webdriver_manager.chrome import ChromeDriverManager
-from bs4 import BeautifulSoupptions.binary_location
+from bs4 import BeautifulSoup
 import cloudscraper
 import time
 import traceback
@@ -110,8 +110,6 @@ def setup_driver() -> webdriver.Chrome:
     """Configure and start the Chrome WebDriver."""
     logger.info("Setting up Chrome WebDriver...")
     options = Options()
-    options.binary_location = "/usr/bin/chromium"  # <--- this line is required!
-
     options.add_argument("--no-sandbox")
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--window-size=1920,1080")
