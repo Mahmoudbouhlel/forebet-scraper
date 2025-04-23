@@ -708,10 +708,7 @@ def main():
         logger.info(f"Total predictions collected: {len(predictions)}")
         
         # Save to Excel if requested
-        if args.excel and predictions:
-            excel_file = f"forebet_matches_{datetime.datetime.now().strftime('%Y-%m-%d')}.xlsx"
-            save_to_excel(predictions, excel_file)
-            logger.info(f"Data saved to {excel_file}")
+    
         
     except Exception as e:
         logger.error(f"Error in main process: {e}")
